@@ -364,7 +364,7 @@
 
     <dimen name="notification_panel_margin_horizontal">0dp</dimen>
 
-    <dimen name="brightness_mirror_height">184px</dimen>
+    <dimen name="brightness_mirror_height">129px</dimen>
 
     <dimen name="volume_dialog_panel_transparent_padding_horizontal">8dp</dimen>
 
@@ -1141,15 +1141,15 @@
     <dimen name="accessibility_floating_tooltip_padding">16dp</dimen>
     <dimen name="accessibility_floating_tooltip_font_size">14sp</dimen>
 
-    <dimen name="rounded_slider_height">48dp</dimen>
-    <dimen name="rounded_slider_corner_radius">24dp</dimen>
-    <dimen name="rounded_slider_icon_size">20dp</dimen>
-    <dimen name="rounded_slider_icon_inset">14dp</dimen>
-    <dimen name="rounded_slider_track_inset">22dp</dimen>
-    <dimen name="rounded_slider_track_width">4dp</dimen>
-    <dimen name="rounded_slider_track_corner_radius">2dp</dimen>
-    <dimen name="rounded_slider_background_padding">8dp</dimen>
-    <dimen name="rounded_slider_background_rounded_corner">32dp</dimen>
+    <dimen name="rounded_slider_height">129px</dimen>
+    <dimen name="rounded_slider_corner_radius">63px</dimen>
+    <dimen name="rounded_slider_icon_size">53px</dimen>
+    <dimen name="rounded_slider_icon_inset">37px</dimen>
+    <dimen name="rounded_slider_track_inset">58px</dimen>
+    <dimen name="rounded_slider_track_width">11px</dimen>
+    <dimen name="rounded_slider_track_corner_radius">5px</dimen>
+    <dimen name="rounded_slider_background_padding">21px</dimen>
+    <dimen name="rounded_slider_background_rounded_corner">85px</dimen>
 
     <dimen name="physical_power_button_center_screen_location_y">620px</dimen>
 
