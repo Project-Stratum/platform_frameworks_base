@@ -57,6 +57,7 @@ import com.android.systemui.media.controls.ui.MediaHost;
 import com.android.systemui.plugins.qs.QS;
 import com.android.systemui.plugins.qs.QSContainerController;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
+import com.android.systemui.qs.customize.InactiveTilePoolView;
 import com.android.systemui.qs.customize.QSCustomizerController;
 import com.android.systemui.qs.dagger.QSFragmentComponent;
 import com.android.systemui.qs.footer.ui.binder.FooterActionsViewBinder;
@@ -124,11 +125,6 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     private final ListeningAndVisibilityLifecycleOwner mListeningAndVisibilityLifecycleOwner;
     private boolean mShowCollapsedOnKeyguard;
     private boolean mLastKeyguardAndExpanded;
-    /**
-     * The last received state from the controller. This should not be used directly to check if
-     * we're on keyguard but use {@link #isKeyguardState()} instead since that is more accurate
-     * during state transitions which often call into us.
-     */
     private int mStatusBarState = -1;
     private QSContainerImplController mQSContainerImplController;
     private int[] mTmpLocation = new int[2];
@@ -140,32 +136,18 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     private FooterActionsViewModel mQSFooterActionsViewModel;
     @Nullable
     private ScrollListener mScrollListener;
-    /**
-     * When true, QS will translate from outside the screen. It will be clipped with parallax
-     * otherwise.
-     */
     private boolean mInSplitShade;
-
-    /**
-     * Are we currently transitioning from lockscreen to the full shade?
-     */
     private boolean mTransitioningToFullShade;
-
     private final DumpManager mDumpManager;
-
-    /**
-     * Progress of pull down from the center of the lock screen.
-     * @see com.android.systemui.statusbar.LockscreenShadeTransitionController
-     */
     private float mLockscreenToShadeProgress;
-
     private boolean mOverScrolling;
-
-    // Whether QQS or QS is visible. When in lockscreen, this is true if and only if QQS or QS is
-    // visible;
     private boolean mQsVisible;
-
     private boolean mIsSmallScreen;
+
+    // ---- In-place edit mode ----
+    private InPlaceEditController mInPlaceEditController;
+    private InactiveTilePoolView mPoolView;
+    private ViewGroup mPoolContainer;
 
     @Inject
     public QSFragment(RemoteInputQuickSettingsDisabler remoteInputQsDisabler,
@@ -221,8 +203,7 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
         mQSPanelController.init();
         mQuickQSPanelController.init();
 
-        mQSFooterActionsViewModel = mFooterActionsViewModelFactory.create(/* lifecycleOwner */
-                this);
+        mQSFooterActionsViewModel = mFooterActionsViewModelFactory.create(this);
         bindFooterActionsView(view);
         mFooterActionsController.init();
 
@@ -233,12 +214,11 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
                 });
         mQSPanelScrollView.setOnScrollChangeListener(
                 (v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
-                    // Lazily update animators whenever the scrolling changes
                     mQSAnimator.requestAnimatorUpdate();
                     if (mScrollListener != null) {
                         mScrollListener.onQsPanelScrollChanged(scrollY);
                     }
-        });
+                });
         mHeader = view.findViewById(R.id.header);
         mFooter = qsFragmentComponent.getQSFooter();
 
@@ -275,12 +255,66 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
                 });
         mQSPanelController.setUsingHorizontalLayoutChangeListener(
                 () -> {
-                    // The hostview may be faded out in the horizontal layout. Let's make sure to
-                    // reset the alpha when switching layouts. This is fine since the animator will
-                    // update the alpha if it's not supposed to be 1.0f
                     mQSPanelController.getMediaHost().getHostView().setAlpha(1.0f);
                     mQSAnimator.requestAnimatorUpdate();
                 });
+
+        // Wire in-place edit mode after everything else is ready
+        wireInPlaceEditMode(view, qsFragmentComponent);
+    }
+
+    /**
+     * Wires up InPlaceEditController with all the views it needs to fade in/out.
+     * Called at the end of onViewCreated so all views are guaranteed to exist.
+     */
+    private void wireInPlaceEditMode(View view, QSFragmentComponent qsFragmentComponent) {
+        mInPlaceEditController = qsFragmentComponent.getInPlaceEditController();
+
+        // 1. QSPanel itself for back arrow overlay
+        QSPanel qsPanel = view.findViewById(R.id.quick_settings_panel);
+        mInPlaceEditController.setQsPanelView(qsPanel);
+
+        // 2. Brightness slider
+        View brightness = mQSPanelController.getBrightnessView();
+        mInPlaceEditController.setBrightnessView(brightness);
+
+        // 3. Footer actions row
+        View footerActions = view.findViewById(R.id.qs_footer_actions);
+        mInPlaceEditController.setFooterActionsView(footerActions);
+
+        // 4. Media host view
+        View mediaHost = mQsMediaHost.getHostView();
+        mInPlaceEditController.setMediaHostView(mediaHost);
+
+        // 5. Build inactive tile pool - FULL WIDTH, no margins
+        if (qsPanel != null) {
+            // Pool container - full width with NO side margins
+            mPoolContainer = new LinearLayout(getContext());
+            ((LinearLayout) mPoolContainer).setOrientation(LinearLayout.VERTICAL);
+            mPoolContainer.setAlpha(0f);
+            mPoolContainer.setVisibility(View.GONE);
+
+            // Pool view with max height
+            mPoolView = new InactiveTilePoolView(getContext());
+            int maxPoolHeight = (int) (getResources().getDisplayMetrics().heightPixels * 0.4f);
+            mPoolView.setMaxHeight(maxPoolHeight);
+            mPoolView.setOnTileAddedListener(spec -> mInPlaceEditController.addTileFromPool(spec));
+
+            // Add pool to container with FULL width
+            mPoolContainer.addView(mPoolView, new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            // Add pool container to QSPanel with FULL width, NO margins
+            ViewGroup.MarginLayoutParams poolParams = new ViewGroup.MarginLayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            poolParams.setMargins(0, 0, 0, 0); // NO side margins
+            qsPanel.addView(mPoolContainer, poolParams);
+
+            mInPlaceEditController.setPoolView(mPoolView);
+            mInPlaceEditController.setPoolContainer(mPoolContainer);
+        }
     }
 
     private void bindFooterActionsView(View root) {
@@ -294,16 +328,11 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
             return;
         }
 
-        // Compose is available, so let's use the Compose implementation of the footer actions.
         Log.d(TAG, "Binding the Compose implementation of the QS footer actions");
         View composeView = ComposeFacade.INSTANCE.createFooterActionsView(root.getContext(),
                 mQSFooterActionsViewModel, mListeningAndVisibilityLifecycleOwner);
-
-        // The id R.id.qs_footer_actions is used by QSContainerImpl to set the horizontal margin
-        // to all views except for qs_footer_actions, so we set it to the Compose view.
         composeView.setId(R.id.qs_footer_actions);
 
-        // Replace the View by the Compose provided one.
         ViewGroup parent = (ViewGroup) footerActionsView.getParent();
         ViewGroup.LayoutParams layoutParams = footerActionsView.getLayoutParams();
         int index = parent.indexOfChild(footerActionsView);
@@ -355,28 +384,19 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     }
 
     @VisibleForTesting
-    boolean isListening() {
-        return mListening;
-    }
+    boolean isListening() { return mListening; }
 
     @VisibleForTesting
-    boolean isExpanded() {
-        return mQsExpanded;
-    }
+    boolean isExpanded() { return mQsExpanded; }
 
     @VisibleForTesting
-    boolean isQsVisible() {
-        return mQsVisible;
-    }
+    boolean isQsVisible() { return mQsVisible; }
 
     @Override
-    public View getHeader() {
-        return mHeader;
-    }
+    public View getHeader() { return mHeader; }
 
     @Override
-    public void setHasNotifications(boolean hasNotifications) {
-    }
+    public void setHasNotifications(boolean hasNotifications) {}
 
     @Override
     public void setPanelView(HeightListener panelView) {
@@ -430,7 +450,8 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
 
     @Override
     public boolean isCustomizing() {
-        return mQSCustomizerController.isCustomizing();
+        return mQSCustomizerController.isCustomizing()
+                || (mInPlaceEditController != null && mInPlaceEditController.isInEditMode());
     }
 
     @Override
@@ -480,8 +501,6 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     }
 
     private boolean isKeyguardState() {
-        // We want the freshest state here since otherwise we'll have some weirdness if earlier
-        // listeners trigger updates
         return mStatusBarStateController.getCurrentOrUpcomingState() == KEYGUARD;
     }
 
@@ -495,8 +514,7 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
                 mQSAnimator.setShowCollapsedOnKeyguard(showCollapsed);
             }
             if (!showCollapsed && isKeyguardState()) {
-                setQsExpansion(mLastQSExpansion, mLastPanelFraction, 0,
-                        mSquishinessFraction);
+                setQsExpansion(mLastQSExpansion, mLastPanelFraction, 0, mSquishinessFraction);
             }
         }
     }
@@ -525,9 +543,14 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     public void setExpanded(boolean expanded) {
         if (DEBUG) Log.d(TAG, "setExpanded " + expanded);
         mQsExpanded = expanded;
+
+        // Collapsing QS → exit in-place edit mode automatically
+        if (!expanded && mInPlaceEditController != null
+                && mInPlaceEditController.isInEditMode()) {
+            mInPlaceEditController.exitEditMode();
+        }
+
         if (mInSplitShade && mQsExpanded) {
-            // in split shade QS is expanded immediately when shade expansion starts and then we
-            // also need to listen to changes - otherwise QS is updated only once its fully expanded
             setListening(true);
         } else {
             updateQsPanelControllerListening();
@@ -683,7 +706,6 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
         }
 
         if (!fullyExpanded) {
-            // Set bounds on the QS panel so it doesn't run over the header when animating.
             mQsBounds.top = (int) -mQSPanelScrollView.getTranslationY();
             mQsBounds.right = mQSPanelScrollView.getWidth();
             mQsBounds.bottom = mQSPanelScrollView.getHeight();
@@ -699,9 +721,6 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
         if (!mInSplitShade
                 || mStatusBarStateController.getState() == KEYGUARD
                 || mStatusBarStateController.getState() == SHADE_LOCKED) {
-            // At beginning, state is 0 and will apply wrong squishiness to MediaHost in lockscreen
-            // and media player expect no change by squishiness in lock screen shade. Don't bother
-            // squishing mQsMediaHost when not in split shade to prevent problems with stale state.
             mQsMediaHost.setSquishFraction(1.0F);
         } else {
             mQsMediaHost.setSquishFraction(mSquishinessFraction);
@@ -716,33 +735,22 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
             view.setVisibility(View.INVISIBLE);
         } else if (progress > 0 && view.getVisibility() != View.VISIBLE) {
             mLogger.logVisibility("QS fragment", View.VISIBLE);
-            view.setVisibility((View.VISIBLE));
+            view.setVisibility(View.VISIBLE);
         }
         view.setAlpha(interpolateAlphaAnimationProgress(progress));
     }
 
     private float calculateAlphaProgress(float panelExpansionFraction) {
-        if (mIsSmallScreen) {
-            // Small screens. QS alpha is not animated.
-            return 1;
-        }
+        if (mIsSmallScreen) return 1;
         if (mInSplitShade) {
-            // Large screens in landscape.
-            // Need to check upcoming state as for unlocked -> AOD transition current state is
-            // not updated yet, but we're transitioning and UI should already follow KEYGUARD state
             if (mTransitioningToFullShade
                     || mStatusBarStateController.getCurrentOrUpcomingState() == KEYGUARD) {
-                // Always use "mFullShadeProgress" on keyguard, because
-                // "panelExpansionFractions" is always 1 on keyguard split shade.
                 return mLockscreenToShadeProgress;
             } else {
                 return panelExpansionFraction;
             }
         }
-        // Large screens in portrait.
         if (mTransitioningToFullShade) {
-            // Only use this value during the standard lock screen shade expansion. During the
-            // "quick" expansion from top, this value is 0.
             return mLockscreenToShadeProgress;
         } else {
             return panelExpansionFraction;
@@ -753,10 +761,7 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
         if (mQSPanelController.isBouncerInTransit()) {
             return BouncerPanelExpansionCalculator.aboutToShowBouncerProgress(progress);
         }
-        if (isKeyguardState()) {
-            // Alpha progress should be linear on lockscreen shade expansion.
-            return progress;
-        }
+        if (isKeyguardState()) return progress;
         if (mIsSmallScreen) {
             return ShadeInterpolation.getContentAlpha(progress);
         } else {
@@ -767,10 +772,6 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     @VisibleForTesting
     void updateQsBounds() {
         if (mLastQSExpansion == 1.0f) {
-            // Fully expanded, let's set the layout bounds as clip bounds. This is necessary because
-            // it's a scrollview and otherwise wouldn't be clipped. However, we set the horizontal
-            // bounds so the pages go to the ends of QSContainerImpl (most cases) or its parent
-            // (large screen portrait)
             int sideMargin = getResources().getDimensionPixelSize(
                     R.dimen.qs_tiles_page_horizontal_margin) * 2;
             mQsBounds.set(-sideMargin, 0, mQSPanelScrollView.getWidth() + sideMargin,
@@ -790,7 +791,6 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     private void updateMediaPositions() {
         if (Utils.useQsMediaPlayer(getContext())) {
             View hostView = mQsMediaHost.getHostView();
-            // Make sure the media appears a bit from the top to make it look nicer
             if (mLastQSExpansion > 0 && !isKeyguardState() && !mQqsMediaHost.getVisible()
                     && !mQSPanelController.shouldUseHorizontalLayout() && !mInSplitShade) {
                 float interpolation = 1.0f - mLastQSExpansion;
@@ -822,8 +822,6 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
                     @Override
                     public void onAnimationEnd(Animator animation) {
                         if (getView() != null) {
-                            // The view could be destroyed before the animation completes when
-                            // switching users.
                             getView().animate().setListener(null);
                         }
                         mHeaderAnimating = false;
@@ -847,6 +845,12 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     @Override
     public void closeCustomizer() {
         mQSCustomizerController.hide();
+
+        // Also exit in-place edit mode if it is active
+        if (mInPlaceEditController != null && mInPlaceEditController.isInEditMode()) {
+            mInPlaceEditController.exitEditMode();
+        }
+
         if (mQuickQSPanelController != null) {
             mQuickQSPanelController.refreshAllTiles();
             mQuickQSPanelController.setTiles();
@@ -859,22 +863,15 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     }
 
     public void notifyCustomizeChanged() {
-        // The customize state changed, so our height changed.
         mContainer.updateExpansion();
         boolean customizing = isCustomizing();
         mQSPanelScrollView.setVisibility(!customizing ? View.VISIBLE : View.INVISIBLE);
         mFooter.setVisibility(!customizing ? View.VISIBLE : View.INVISIBLE);
         mQSFooterActionsViewModel.onVisibilityChangeRequested(!customizing);
         mHeader.setVisibility(!customizing ? View.VISIBLE : View.INVISIBLE);
-        // Let the panel know the position changed and it needs to update where notifications
-        // and whatnot are.
         mPanelView.onQsHeightChanged();
     }
 
-    /**
-     * The height this view wants to be. This is different from {@link View#getMeasuredHeight} such
-     * that during closing the detail panel, this already returns the smaller height.
-     */
     @Override
     public int getDesiredHeight() {
         if (mQSCustomizerController.isCustomizing()) {
@@ -896,19 +893,10 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
         return mHeader.getHeight();
     }
 
-    /**
-     * Returns the min expansion height for split shade.
-     *
-     * On split shade, QS is always expanded and goes from the top of the screen to the bottom of
-     * the QS container.
-     */
     private int getQsMinExpansionHeightForSplitShade() {
         getView().getLocationOnScreen(mLocationTemp);
         int top = mLocationTemp[1];
-        // We want to get the original top position, so we subtract any translation currently set.
         int originalTop = (int) (top - getView().getTranslationY());
-        // On split shade the QS view doesn't start at the top of the screen, so we need to add the
-        // top margin.
         return originalTop + getView().getHeight();
     }
 
@@ -939,7 +927,6 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
         public void onAnimationEnd(Animator animation) {
             mHeaderAnimating = false;
             updateQsState();
-            // Unset the listener, otherwise this may persist for another view property animation
             getView().animate().setListener(null);
         }
     };
@@ -947,19 +934,13 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
     @Override
     public void onUpcomingStateChanged(int upcomingState) {
         if (upcomingState == KEYGUARD) {
-            // refresh state of QS as soon as possible - while it's still upcoming - so in case of
-            // transition to KEYGUARD (e.g. from unlocked to AOD) all objects are aware they should
-            // already behave like on keyguard. Otherwise we might be doing extra work,
-            // e.g. QSAnimator making QS visible and then quickly invisible
             onStateChanged(upcomingState);
         }
     }
 
     @Override
     public void onStateChanged(int newState) {
-        if (newState == mStatusBarState) {
-            return;
-        }
+        if (newState == mStatusBarState) return;
         mStatusBarState = newState;
         setKeyguardShowing(newState == KEYGUARD);
         updateShowCollapsedOnKeyguard();
@@ -972,71 +953,61 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
 
     @Override
     public void dump(PrintWriter pw, String[] args) {
-        IndentingPrintWriter indentingPw = new IndentingPrintWriter(pw, /* singleIndent= */ "  ");
-        indentingPw.println("QSFragment:");
-        indentingPw.increaseIndent();
-        indentingPw.println("mQsBounds: " + mQsBounds);
-        indentingPw.println("mQsExpanded: " + mQsExpanded);
-        indentingPw.println("mHeaderAnimating: " + mHeaderAnimating);
-        indentingPw.println("mStackScrollerOverscrolling: " + mStackScrollerOverscrolling);
-        indentingPw.println("mListening: " + mListening);
-        indentingPw.println("mQsVisible: " + mQsVisible);
-        indentingPw.println("mLayoutDirection: " + mLayoutDirection);
-        indentingPw.println("mLastQSExpansion: " + mLastQSExpansion);
-        indentingPw.println("mLastPanelFraction: " + mLastPanelFraction);
-        indentingPw.println("mSquishinessFraction: " + mSquishinessFraction);
-        indentingPw.println("mQsDisabled: " + mQsDisabled);
-        indentingPw.println("mTemp: " + Arrays.toString(mLocationTemp));
-        indentingPw.println("mShowCollapsedOnKeyguard: " + mShowCollapsedOnKeyguard);
-        indentingPw.println("mLastKeyguardAndExpanded: " + mLastKeyguardAndExpanded);
-        indentingPw.println("mStatusBarState: " + StatusBarState.toString(mStatusBarState));
-        indentingPw.println("mTmpLocation: " + Arrays.toString(mTmpLocation));
-        indentingPw.println("mLastViewHeight: " + mLastViewHeight);
-        indentingPw.println("mLastHeaderTranslation: " + mLastHeaderTranslation);
-        indentingPw.println("mInSplitShade: " + mInSplitShade);
-        indentingPw.println("mTransitioningToFullShade: " + mTransitioningToFullShade);
-        indentingPw.println("mLockscreenToShadeProgress: " + mLockscreenToShadeProgress);
-        indentingPw.println("mOverScrolling: " + mOverScrolling);
-        indentingPw.println("isCustomizing: " + mQSCustomizerController.isCustomizing());
+        IndentingPrintWriter ipw = new IndentingPrintWriter(pw, "  ");
+        ipw.println("QSFragment:");
+        ipw.increaseIndent();
+        ipw.println("mQsBounds: " + mQsBounds);
+        ipw.println("mQsExpanded: " + mQsExpanded);
+        ipw.println("mHeaderAnimating: " + mHeaderAnimating);
+        ipw.println("mStackScrollerOverscrolling: " + mStackScrollerOverscrolling);
+        ipw.println("mListening: " + mListening);
+        ipw.println("mQsVisible: " + mQsVisible);
+        ipw.println("mLayoutDirection: " + mLayoutDirection);
+        ipw.println("mLastQSExpansion: " + mLastQSExpansion);
+        ipw.println("mLastPanelFraction: " + mLastPanelFraction);
+        ipw.println("mSquishinessFraction: " + mSquishinessFraction);
+        ipw.println("mQsDisabled: " + mQsDisabled);
+        ipw.println("mTemp: " + Arrays.toString(mLocationTemp));
+        ipw.println("mShowCollapsedOnKeyguard: " + mShowCollapsedOnKeyguard);
+        ipw.println("mLastKeyguardAndExpanded: " + mLastKeyguardAndExpanded);
+        ipw.println("mStatusBarState: " + StatusBarState.toString(mStatusBarState));
+        ipw.println("mTmpLocation: " + Arrays.toString(mTmpLocation));
+        ipw.println("mLastViewHeight: " + mLastViewHeight);
+        ipw.println("mLastHeaderTranslation: " + mLastHeaderTranslation);
+        ipw.println("mInSplitShade: " + mInSplitShade);
+        ipw.println("mTransitioningToFullShade: " + mTransitioningToFullShade);
+        ipw.println("mLockscreenToShadeProgress: " + mLockscreenToShadeProgress);
+        ipw.println("mOverScrolling: " + mOverScrolling);
+        ipw.println("isCustomizing: " + mQSCustomizerController.isCustomizing());
+        ipw.println("isInEditMode: " + (mInPlaceEditController != null
+                && mInPlaceEditController.isInEditMode()));
         View view = getView();
         if (view != null) {
-            indentingPw.println("top: " + view.getTop());
-            indentingPw.println("y: " + view.getY());
-            indentingPw.println("translationY: " + view.getTranslationY());
-            indentingPw.println("alpha: " + view.getAlpha());
-            indentingPw.println("height: " + view.getHeight());
-            indentingPw.println("measuredHeight: " + view.getMeasuredHeight());
-            indentingPw.println("clipBounds: " + view.getClipBounds());
+            ipw.println("top: " + view.getTop());
+            ipw.println("y: " + view.getY());
+            ipw.println("translationY: " + view.getTranslationY());
+            ipw.println("alpha: " + view.getAlpha());
+            ipw.println("height: " + view.getHeight());
+            ipw.println("measuredHeight: " + view.getMeasuredHeight());
+            ipw.println("clipBounds: " + view.getClipBounds());
         } else {
-            indentingPw.println("getView(): null");
+            ipw.println("getView(): null");
         }
         QuickStatusBarHeader header = mHeader;
         if (header != null) {
-            indentingPw.println("headerHeight: " + header.getHeight());
-            indentingPw.println("Header visibility: " + visibilityToString(header.getVisibility()));
+            ipw.println("headerHeight: " + header.getHeight());
+            ipw.println("Header visibility: " + visibilityToString(header.getVisibility()));
         } else {
-            indentingPw.println("mHeader: null");
+            ipw.println("mHeader: null");
         }
     }
 
     private static String visibilityToString(int visibility) {
-        if (visibility == View.VISIBLE) {
-            return "VISIBLE";
-        }
-        if (visibility == View.INVISIBLE) {
-            return "INVISIBLE";
-        }
+        if (visibility == View.VISIBLE) return "VISIBLE";
+        if (visibility == View.INVISIBLE) return "INVISIBLE";
         return "GONE";
     }
 
-    /**
-     * A {@link LifecycleOwner} whose state is driven by the current state of this fragment:
-     *
-     * - DESTROYED when the fragment is destroyed.
-     * - CREATED when mListening == mQsVisible == false.
-     * - STARTED when mListening == true && mQsVisible == false.
-     * - RESUMED when mListening == true && mQsVisible == true.
-     */
     @VisibleForTesting
     class ListeningAndVisibilityLifecycleOwner implements LifecycleOwner {
         private final LifecycleRegistry mLifecycleRegistry = new LifecycleRegistry(this);
@@ -1051,28 +1022,19 @@ public class QSFragment extends LifecycleFragment implements QS, CommandQueue.Ca
             return mLifecycleRegistry;
         }
 
-        /**
-         * Update the state of the associated lifecycle. This should be called whenever
-         * {@code mListening} or {@code mQsVisible} is changed.
-         */
         public void updateState() {
             if (mDestroyed) {
                 mLifecycleRegistry.setCurrentState(Lifecycle.State.DESTROYED);
                 return;
             }
-
             if (!mListening) {
                 mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
                 return;
             }
-
-            // mListening && !mQsVisible.
             if (!mQsVisible) {
                 mLifecycleRegistry.setCurrentState(Lifecycle.State.STARTED);
                 return;
             }
-
-            // mListening && mQsVisible.
             mLifecycleRegistry.setCurrentState(Lifecycle.State.RESUMED);
         }
 

@@ -26,15 +26,19 @@ import android.view.View;
 import com.android.systemui.R;
 import com.android.systemui.dagger.qualifiers.RootView;
 import com.android.systemui.plugins.qs.QS;
+import com.android.systemui.qs.InPlaceEditController;
 import com.android.systemui.qs.QSContainerImpl;
 import com.android.systemui.qs.QSFooter;
 import com.android.systemui.qs.QSFooterView;
 import com.android.systemui.qs.QSFooterViewController;
 import com.android.systemui.qs.QSFragment;
+import com.android.systemui.qs.QSHost;
 import com.android.systemui.qs.QSPanel;
+import com.android.systemui.qs.QSPanelController;
 import com.android.systemui.qs.QuickQSPanel;
 import com.android.systemui.qs.QuickStatusBarHeader;
 import com.android.systemui.qs.customize.QSCustomizer;
+import com.android.systemui.qs.customize.TileQueryHelper;
 
 import javax.inject.Named;
 
@@ -134,5 +138,19 @@ public interface QSFragmentModule {
     @Named(QS_USING_COLLAPSED_LANDSCAPE_MEDIA)
     static boolean providesQSUsingCollapsedLandscapeMedia(Context context) {
         return useCollapsedMediaInLandscape(context.getResources());
+    }
+
+    /**
+     * Provides InPlaceEditController scoped to QS.
+     * This is the central controller for the in-place tile editing mode.
+     */
+    @Provides
+    @QSScope
+    static InPlaceEditController providesInPlaceEditController(
+            @QSThemedContext Context context,
+            QSPanelController qsPanelController,
+            TileQueryHelper tileQueryHelper,
+            QSHost qsHost) {
+        return new InPlaceEditController(context, qsPanelController, tileQueryHelper, qsHost);
     }
 }

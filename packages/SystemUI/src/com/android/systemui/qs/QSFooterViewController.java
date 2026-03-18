@@ -33,9 +33,6 @@ import com.android.systemui.util.ViewController;
 
 import javax.inject.Inject;
 
-/**
- * Controller for {@link QSFooterView}.
- */
 @QSScope
 public class QSFooterViewController extends ViewController<QSFooterView> implements QSFooter {
 
@@ -47,25 +44,28 @@ public class QSFooterViewController extends ViewController<QSFooterView> impleme
     private final FalsingManager mFalsingManager;
     private final ActivityStarter mActivityStarter;
     private final RetailModeInteractor mRetailModeInteractor;
+    private final InPlaceEditController mInPlaceEditController;
 
     @Inject
-    QSFooterViewController(QSFooterView view,
+    QSFooterViewController(
+            QSFooterView view,
             UserTracker userTracker,
             FalsingManager falsingManager,
             ActivityStarter activityStarter,
             QSPanelController qsPanelController,
-            RetailModeInteractor retailModeInteractor
-    ) {
+            RetailModeInteractor retailModeInteractor,
+            InPlaceEditController inPlaceEditController) {
         super(view);
-        mUserTracker = userTracker;
-        mQsPanelController = qsPanelController;
-        mFalsingManager = falsingManager;
-        mActivityStarter = activityStarter;
-        mRetailModeInteractor = retailModeInteractor;
+        mUserTracker           = userTracker;
+        mQsPanelController     = qsPanelController;
+        mFalsingManager        = falsingManager;
+        mActivityStarter       = activityStarter;
+        mRetailModeInteractor  = retailModeInteractor;
+        mInPlaceEditController = inPlaceEditController;
 
-        mBuildText = mView.findViewById(R.id.build);
+        mBuildText     = mView.findViewById(R.id.build);
         mPageIndicator = mView.findViewById(R.id.footer_page_indicator);
-        mEditButton = mView.findViewById(android.R.id.edit);
+        mEditButton    = mView.findViewById(android.R.id.edit);
     }
 
     @Override
@@ -77,21 +77,24 @@ public class QSFooterViewController extends ViewController<QSFooterView> impleme
                         mUserTracker.getUserContext().getSystemService(ClipboardManager.class);
                 String label = getResources().getString(R.string.build_number_clip_data_label);
                 service.setPrimaryClip(ClipData.newPlainText(label, buildText));
-                Toast.makeText(getContext(), R.string.build_number_copy_toast, Toast.LENGTH_SHORT)
-                        .show();
+                Toast.makeText(getContext(), R.string.build_number_copy_toast,
+                        Toast.LENGTH_SHORT).show();
                 return true;
             }
             return false;
         });
 
+        // Edit button enters in-place edit mode
         mEditButton.setOnClickListener(view -> {
-            if (mFalsingManager.isFalseTap(FalsingManager.LOW_PENALTY)) {
-                return;
-            }
-            mActivityStarter
-                    .postQSRunnableDismissingKeyguard(() -> mQsPanelController.showEdit(view));
+            if (mFalsingManager.isFalseTap(FalsingManager.LOW_PENALTY)) return;
+            mActivityStarter.postQSRunnableDismissingKeyguard(
+                    () -> mInPlaceEditController.enterEditMode());
         });
+
         mQsPanelController.setFooterPageIndicator(mPageIndicator);
+        // Let InPlaceEditController fade the edit button in/out
+        mInPlaceEditController.setEditButtonView(mEditButton);
+
         mView.updateEverything();
     }
 
@@ -101,28 +104,13 @@ public class QSFooterViewController extends ViewController<QSFooterView> impleme
     @Override
     public void setVisibility(int visibility) {
         mView.setVisibility(visibility);
-        mEditButton
-                .setVisibility(mRetailModeInteractor.isInRetailMode() ? View.GONE : View.VISIBLE);
-        mEditButton.setClickable(visibility == View.VISIBLE);
+        boolean inRetail = mRetailModeInteractor.isInRetailMode();
+        mEditButton.setVisibility(inRetail ? View.GONE : View.VISIBLE);
+        mEditButton.setClickable(visibility == View.VISIBLE && !inRetail);
     }
 
-    @Override
-    public void setExpanded(boolean expanded) {
-        mView.setExpanded(expanded);
-    }
-
-    @Override
-    public void setExpansion(float expansion) {
-        mView.setExpansion(expansion);
-    }
-
-    @Override
-    public void setKeyguardShowing(boolean keyguardShowing) {
-        mView.setKeyguardShowing();
-    }
-
-    @Override
-    public void disable(int state1, int state2, boolean animate) {
-        mView.disable(state2);
-    }
+    @Override public void setExpanded(boolean expanded) { mView.setExpanded(expanded); }
+    @Override public void setExpansion(float expansion)  { mView.setExpansion(expansion); }
+    @Override public void setKeyguardShowing(boolean k)  { mView.setKeyguardShowing(); }
+    @Override public void disable(int s1, int s2, boolean a) { mView.disable(s2); }
 }

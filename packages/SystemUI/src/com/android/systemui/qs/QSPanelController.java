@@ -258,5 +258,13 @@ public class QSPanelController extends QSPanelControllerBase<QSPanel> {
     public int getPaddingBottom() {
         return mView.getPaddingBottom();
     }
-}
 
+    /** Save the current tile order after editing. */
+    public void saveEditedTileSpecs() {
+        refreshAllTiles();
+    }
+
+    public View getBrightnessView() {
+        return mBrightnessSliderController.getRootView();
+    }
+}

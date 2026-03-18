@@ -5,17 +5,11 @@
  * except in compliance with the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software distributed under the
- * License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
  */
 
 package com.android.systemui.qs;
 
 import static android.app.StatusBarManager.DISABLE2_QUICK_SETTINGS;
-import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
 import android.content.Context;
 import android.content.res.Configuration;
@@ -24,15 +18,12 @@ import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewGroup.LayoutParams;
 import android.widget.FrameLayout;
 
 import com.android.systemui.R;
 import com.android.systemui.util.LargeScreenUtils;
 
-/**
- * View that contains the top-most bits of the QS panel (primarily the status bar with date, time,
- * battery, carrier info and privacy icons) and also contains the {@link QuickQSPanel}.
- */
 public class QuickStatusBarHeader extends FrameLayout {
 
     private boolean mExpanded;
@@ -48,7 +39,6 @@ public class QuickStatusBarHeader extends FrameLayout {
     protected void onFinishInflate() {
         super.onFinishInflate();
         mHeaderQsPanel = findViewById(R.id.quick_qs_panel);
-
         updateResources();
     }
 
@@ -60,12 +50,10 @@ public class QuickStatusBarHeader extends FrameLayout {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // Only react to touches inside QuickQSPanel
         if (event.getY() > mHeaderQsPanel.getTop()) {
             return super.onTouchEvent(event);
-        } else {
-            return false;
         }
+        return false;
     }
 
     void updateResources() {
@@ -74,21 +62,14 @@ public class QuickStatusBarHeader extends FrameLayout {
                 LargeScreenUtils.shouldUseLargeScreenShadeHeader(resources);
 
         ViewGroup.LayoutParams lp = getLayoutParams();
-        if (mQsDisabled) {
-            lp.height = 0;
-        } else {
-            lp.height = WRAP_CONTENT;
-        }
+        lp.height = mQsDisabled ? 0 : LayoutParams.WRAP_CONTENT;
         setLayoutParams(lp);
 
         MarginLayoutParams qqsLP = (MarginLayoutParams) mHeaderQsPanel.getLayoutParams();
-        if (largeScreenHeaderActive) {
-            qqsLP.topMargin = mContext.getResources()
-                    .getDimensionPixelSize(R.dimen.qqs_layout_margin_top);
-        } else {
-            qqsLP.topMargin = mContext.getResources()
-                    .getDimensionPixelSize(R.dimen.large_screen_shade_header_min_height);
-        }
+        qqsLP.topMargin = mContext.getResources().getDimensionPixelSize(
+                largeScreenHeaderActive
+                        ? R.dimen.qqs_layout_margin_top
+                        : R.dimen.large_screen_shade_header_min_height);
         mHeaderQsPanel.setLayoutParams(qqsLP);
     }
 

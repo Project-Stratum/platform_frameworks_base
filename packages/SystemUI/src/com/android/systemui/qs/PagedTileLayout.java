@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2016 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.android.systemui.qs;
 
 import static com.android.internal.jank.InteractionJankMonitor.CUJ_NOTIFICATION_SHADE_QS_SCROLL_SWIPE;
@@ -81,7 +97,7 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
     private int mLastExcessHeight;
     private int mMinRows = 1;
     private int mMaxColumns = TileLayout.NO_MAX_COLUMNS;
-    
+
     private int mLastMaxHeight = -1;
 
     public PagedTileLayout(Context context, AttributeSet attrs) {
@@ -93,14 +109,15 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
         mLayoutOrientation = getResources().getConfiguration().orientation;
         mLayoutDirection = getLayoutDirection();
     }
-    
+
     private boolean isTileCircle(String tileSpec) {
         if (tileSpec == null) return true;
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE);
         return prefs.getBoolean(PREF_PREFIX_SHAPE + tileSpec, true);
     }
-    
-    private final TileLayout.OnRequestLayoutListener mRedistributionListener = new TileLayout.OnRequestLayoutListener() {
+
+    private final TileLayout.OnRequestLayoutListener mRedistributionListener =
+            new TileLayout.OnRequestLayoutListener() {
         @Override
         public void onRequestDistribution() {
             forceTilesRedistribution("Tile resized by user");
@@ -201,10 +218,16 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
     }
 
     @Override
-    public void setListening(boolean listening, UiEventLogger uiEventLogger) {
+    public void setListening(boolean listening, @Nullable UiEventLogger uiEventLogger) {
         if (mListening == listening) return;
         mListening = listening;
-        updateListening();
+
+        for (TileLayout tilePage : mPages) {
+            if (tilePage.getParent() == null) {
+                continue;
+            }
+            tilePage.setListening(mListening, uiEventLogger);
+        }
     }
 
     @Override
@@ -212,12 +235,6 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
         int nPages = mPages.size();
         for (int i = 0; i < nPages; i++) {
             mPages.get(i).setSquishinessFraction(squishinessFraction);
-        }
-    }
-
-    private void updateListening() {
-        for (TileLayout tilePage : mPages) {
-            tilePage.setListening(tilePage.getParent() != null && mListening);
         }
     }
 
@@ -345,12 +362,30 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
         ArrayList<String> out = new ArrayList<>();
         if (page < 0) return out;
         if (page >= mPages.size()) return out;
-        
+
         TileLayout layout = mPages.get(page);
-        for(TileRecord tr : layout.mRecords) {
-             out.add(tr.tile.getTileSpec());
+        for (TileRecord tr : layout.mRecords) {
+            out.add(tr.tile.getTileSpec());
         }
         return out;
+    }
+
+    /**
+     * Returns the TileLayout for a given page index, or null if out of bounds.
+     * Used by InPlaceEditController to animate resize handles on the current page.
+     */
+    @Nullable
+    public TileLayout getPageAt(int page) {
+        if (page < 0 || page >= mPages.size()) return null;
+        return mPages.get(page);
+    }
+
+    /**
+     * Returns the total number of pages currently in the pager.
+     * Used by InPlaceEditController to animate handles out on all pages when exiting edit mode.
+     */
+    public int getPageCount() {
+        return mPages.size();
     }
 
     private void distributeTiles() {
@@ -364,7 +399,7 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
 
         for (int i = 0; i < mTiles.size(); i++) {
             TileRecord tile = mTiles.get(i);
-            
+
             boolean isCircle = isTileCircle(tile.tile.getTileSpec());
             int span = isCircle ? 1 : 2;
 
@@ -381,21 +416,21 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
                 currentRow = 0;
                 currentColumn = 0;
             }
-            
+
             mPages.get(pageIndex).addTile(tile);
-            
+
             currentColumn += span;
-            
+
             if (currentColumn >= maxColumns) {
                 currentRow++;
                 currentColumn = 0;
             }
         }
-        
+
         while (mPages.size() > pageIndex + 1) {
             mPages.remove(mPages.size() - 1);
         }
-        
+
         if (mPageIndicator != null) {
             mPageIndicator.setNumPages(mPages.size());
         }
@@ -472,13 +507,13 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         final int nTiles = mTiles.size();
-        
+
         if (mDistributeTiles || mLastMaxHeight != MeasureSpec.getSize(heightMeasureSpec)
                 || mLastExcessHeight != mExcessHeight) {
 
             mLastMaxHeight = MeasureSpec.getSize(heightMeasureSpec);
             mLastExcessHeight = mExcessHeight;
-            
+
             mDistributeTiles = false;
             distributeTiles();
 
@@ -731,7 +766,6 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
         @Override
         public void destroyItem(ViewGroup container, int position, Object object) {
             container.removeView((View) object);
-            updateListening();
         }
 
         @Override
@@ -744,7 +778,6 @@ public class PagedTileLayout extends ViewPager implements QSTileLayout {
                 container.removeView(view);
             }
             container.addView(view);
-            updateListening();
             return view;
         }
 

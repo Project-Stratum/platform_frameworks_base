@@ -282,7 +282,7 @@ public class QuickQSPanel extends QSPanel implements TunerService.Tunable {
             updateResources();
         }
 
-        private boolean isTileCircle(String tileSpec) {
+        boolean isTileCircle(String tileSpec) {
             if (tileSpec == null) return true;
             SharedPreferences prefs = mContext.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE);
             return prefs.getBoolean(PREF_PREFIX_SHAPE + tileSpec, true);
